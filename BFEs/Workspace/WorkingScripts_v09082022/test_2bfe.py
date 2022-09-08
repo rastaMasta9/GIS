@@ -36,19 +36,17 @@ fl_buff, fl_buff_sj = buff_fl_intersection(fl, 1)
 adj = create_adjacent_gpd(fl_buff_sj)
 
 # Filter 'adj' for Forks( i.e. FLowlines with more than 2 intersections)
-#adj['threes'] = adj.apply(lambda x: 1 if len(x['index_right']) == 3 else np.nan, axis=1)
-#threes = adj.loc[adj['threes'].notnull()]
+adj['threes'] = adj.apply(lambda x: 1 if len(x['index_right']) == 3 else np.nan, axis=1)
+threes = adj.loc[adj['threes'].notnull()]
 
 # List of groups of Forks
-#if threes.shape[0] > 0:
-#    forks_list = find_forks(threes)
+if threes.shape[0] > 0:
+    forks_list = find_forks(threes)
 
 # Run Triangulation Build by Walking FLowlines with 2 BFE intersections
 triangles = gpd.GeoDataFrame()
 for i, a in adj.iterrows():
-    if len(a['index_right']) == 1: 
-        pass
-    elif len(a['index_right']) == 3:
+    if len(a['index_right']) != 2: 
         pass
     else:
         fl_i = fl.iloc[i]
@@ -68,10 +66,10 @@ for i, a in adj.iterrows():
         fsp_pts = fsp_pts_simplify(fsp_s, fl_i_pts, tolerance=3)
 
         # FSP Interpolation
-        fsp_i_pts = IDW(bfe_set, fsp_pts)
+        fsp_i_pts = IDW(bfe_set, fsp_pts, 2)
 
         # Concat and Triangulate
-        all_pts = pd.concat([fl_i_pts, fsp_i_pts], ignore_index=True)
+        all_pts = pd.concat([bfe_pts, fl_i_pts, fsp_i_pts], ignore_index=True)
         all_pts_multigeom = MultiPoint(all_pts.geometry.to_list())
 
         tin = triangulate(all_pts_multigeom)
@@ -81,7 +79,41 @@ for i, a in adj.iterrows():
         final_tin = extract_geom(tin_df)
         triangles = pd.concat([triangles, final_tin], ignore_index=True)
 
-triangles.to_file(input('Output File: '))
+# fork workflow
+if fork_list:
+    fork_triangles = gpd.GeoDataFrame()
+    for f in fork_list:
+        f_seg, buff_union = union_fork(f, fl_df_buff)
+        bfe_set = bfe.sjoin(buff_union, how='left', predicate='intersects')
+        bfe_set = bfe_set.loc[bfe_set['index_right'].notnull()]
+        bfe_set = bfe_set[['index', 'ELEV', 'geometry']]
+
+        # Getting Z-geom for BFE Points
+        bfe_pts = bfe_zpts(bfe_set)
+
+        # Flowline interpolation
+        f_interp_df = flowline_interpolation(bfe_set, f_seg, divisions=15, power=2)
+
+        # FSP Simplify and interpolation
+        fsp_pts = fsp_pts_simplify(fsp_s, f_interp_df, tolerance=3)
+        fsp_interp_df = IDW(bfe_set, fsp_pts, power=2)
+
+        # Concat and Triangulate
+        all_pts = pd.concat([bfe_pts, f_interp_df, fsp_interp_df], ignore_index=True)
+        all_pts_multigeom = MultiPoint(all_pts.geometry.to_list())
+
+        tin = triangulate(all_pts_multigeom)
+        tin_df = g(tin, 26913)
+        
+        # Extract Geom
+        final_tin = extract_geom(tin_df)
+        fork_triangles = pd.concat([fork_triangles, final_tin], ignore_index=True)
+
+
+                
+all_triangles = g(pd.concat([triangles, fork_triangles], ignore_index=True), 26913)
+
+all_triangles.to_file(input('Output File: '))
 
 
 
