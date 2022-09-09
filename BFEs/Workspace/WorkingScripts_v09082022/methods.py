@@ -71,60 +71,33 @@ def split_fsp(fsp, bfe):
 
 # 3: Split Flowline to Iterate on
 def split_flowline(fl, bfe):
+    bfe_l = bfe.copy()
     fl_line = fl.geometry.unary_union
-    bfe_line = bfe.geometry.unary_union
+    bfe_line = bfe_l.geometry.unary_union
     
     fl_split = split(linemerge(fl_line), bfe_line)
     fl_df = g([f for f in fl_split], 26913)
     
     return fl_df
 
-# 4: Buffer line segs by approx 1m and then spatial join with original flowline df
-def buff_fl_intersection(fl, buffer):
-    buff_geom = fl['geometry'].buffer(buffer)
-    fl_buff = g(buff_geom, 26913)
-    fl_buff.reset_index(inplace=True)
-
-    fl_buff_sj = fl_buff.sjoin(fl)
-    fl_buff_sj = fl_buff_sj.loc[fl_buff_sj['index'] != fl_buff_sj['index_right']]
+# 4: Find Forks from Adj flowline segments
+def find_forks(flowline):
+    forks_list = []
+    for i, f in flowline.iterrows():
+        p1, p2 = f.geometry.boundary
+        p1b = g(p1.buffer(5), 26913)
+        p2b = g(p2.buffer(5), 26913)
+        p1j = p1b.sjoin(flowline)
+        p2j = p2b.sjoin(flowline)
+    if p1j.shape[0] == 3:
+        forks_list.append(p1j['index_right'].to_list())
+    if p2j.shape[0] == 3:
+        forks_list.append(p2j['index_right'].to_list())
     
-    return fl_buff, fl_buff_sj
-
-# 5 Create Adjacent df to parse Forks and Normal Flowline segments.
-# Iterate on this df during build
-def create_adjacent_gpd(fl_buff_sj):
-    adj = fl_buff_sj.groupby('index')['index_right'].apply(list)
-    adj = pd.DataFrame(adj)
-    adj.reset_index(inplace=True)
-
-    return adj
-
-
-# 6: Find Forks from Adj flowline segments
-def find_forks(df):
-    """USE THREES DATAFRAME. Takes flowlines with more than 2 intersections and organizes intersectional list based on
-    which indices occur within them. Returns a list of indices that create each fork"""
+    forks_list.sort()
+    forks_list = list(f for f,_ in itertools.groupby(forks_list))
     
-    # Locate intesections where indices occur and sort each list to create flowline indice lists.
-    fdict = {}
-    for i in df['index']:
-        mask = df['index_right'].apply(lambda x: i in x)
-        fls = df.loc[mask, 'index'].to_list()
-        fls.append(i)
-        fls.sort()
-        fdict[i] = fls
-    
-    # Build df and drop simliar lists (i.e. leaves only unqiue lists)
-    fdf = pd.DataFrame.from_dict(fdict, orient='index')
-    fdf = fdf.drop_duplicates()
-    
-    # Retrieve each indice found in the df column and place in correspnding list
-    forks = []
-    for i, r in fdf.iterrows():
-        l = [r[0], r[1], r[2]]
-        forks.append(l)
-    return forks
-
+    return forks_list
 
 # 7: Getting Z geom for BFE points
 def bfe_zpts(bfe):
@@ -156,36 +129,48 @@ def interp_pts_fromLine(bfe, line, divisions):
     return interp_pts
 
 
-def interp_pts_fromFork(bfe, line, divisions):
-# get distance between BFEs
-    tot_d1 = bfe.iloc[0].geometry.distance(bfe.iloc[1].geometry)
-    tot_d2 = bfe.iloc[1].geometry.distance(bfe.iloc[2].geometry)
-    tot_d3 = bfe.iloc[0].geometry.distance(bfe.iloc[2].geometry)
+def interp_pts_fromFork(bfe, line, divisions, non_fork):
+    # get distance between BFEs
+    if non_fork:
+        tot_d = bfe.iloc[0].geometry.distance(bfe.iloc[1].geometry)
+        cuts = round(tot_d/divisions)
+        # interpolate points at fixed distance 'cuts'
+        splitter = [list(line.geometry.interpolate(i/cuts, normalized=True)) for i in range(1, cuts)]
 
-    # Find max distance between BFEs
-    d_dict = {'1': tot_d1, '2': tot_d2, '3': tot_d3}
-    max_fork_dist = max(d_dict.values())
-    cuts = round(max_fork_dist/divisions)
-
-    # interpolate points at fixed distance 'cuts'
-    splitter = [list(line.geometry.interpolate(i/cuts, normalized=True)) for i in range(1, cuts)]
-
-    interp_geom = MultiPoint([s for x in splitter for s in x])
-    interp_pts = g(interp_geom, 26913)
-    interp_pts = interp_pts.explode()
+        interp_geom = MultiPoint([s for x in splitter for s in x])
+        interp_pts = g(interp_geom, 26913)
+        interp_pts = interp_pts.explode()
     
-    return interp_pts
+        return interp_pts
+
+    else:
+        tot_d1 = bfe.iloc[0].geometry.distance(bfe.iloc[1].geometry)
+        tot_d2 = bfe.iloc[0].geometry.distance(bfe.iloc[2].geometry)
+        tot_d3 = bfe.iloc[1].geometry.distance(bfe.iloc[2].geometry)
+        d_dict = {'1': tot_d1, '2': tot_d2, '3': tot_d3}
+
+        max_fork_dist = max(d_dict.values())
+        cuts = round(max_fork_dist/divisions)
+
+        # interpolate points at fixed distance 'cuts'
+        splitter = [list(line.geometry.interpolate(i/cuts, normalized=True)) for i in range(1, cuts)]
+
+        interp_geom = MultiPoint([s for x in splitter for s in x])
+        interp_pts = g(interp_geom, 26913)
+        interp_pts = interp_pts.explode()
+
+        return interp_pts
 
 # 7: BFE Centroid and interpolate pts along Flowline
-def flowline_interpolation(bfe, line, divisions, power, fork='no'):
+def flowline_interpolation(bfe, line, divisions, power, fork='no', non_fork=False):
     if fork == 'yes':
-        interp_f_pts = interp_pts_fromFork(bfe, line, divisions)
-        interp_f_df = IDW_Forks(bfe, interp_f_pts, power)
+        interp_f_pts = interp_pts_fromFork(bfe, line, divisions, non_fork)
+        interp_f_df = IDW_Forks(bfe, interp_f_pts, power, non_fork)
         return interp_f_df
-    
+
     else:
         interp_pts = interp_pts_fromLine(bfe, line, divisions)
-        interp_df = IDW(bfe, interp_df, power)
+        interp_df = IDW(bfe, interp_pts, power)
         return interp_df
 
     
@@ -226,28 +211,32 @@ def IDW(bfe, pts, power):
     return pts[['ELEV', 'geometry']]
 
 #  Fork BFE Point Z Interpolation
-def IDW_Forks(bfe, interp_pts, power):
-    # Create centroid field
-    bfe['centroid'] = bfe.apply(lambda x: Point([x['geometry'].centroid.coords[0]]), axis=1)
+def IDW_Forks(bfe, interp_pts, power, non_fork):
+    if non_fork:
+        interp_pts = IDW(bfe, interp_pts, power)
+    
+    else:
+        # Create centroid field
+        bfe['centroid'] = bfe.apply(lambda x: Point([x['geometry'].centroid.coords[0]]), axis=1)
 
-    bfe1_elev = bfe.iloc[0]['ELEV']
-    bfe2_elev = bfe.iloc[1]['ELEV']
-    bfe3_elev = bfe.iloc[2]['ELEV']
+        bfe1_elev = bfe.iloc[0]['ELEV']
+        bfe2_elev = bfe.iloc[1]['ELEV']
+        bfe3_elev = bfe.iloc[2]['ELEV']
 
-    for i, geo in interp_pts.iterrows():
-        d1 = bfe.iloc[0].centroid.distance(geo['geometry'])
-        d2 = bfe.iloc[1].centroid.distance(geo['geometry'])
-        d3 = bfe.iloc[2].centroid.distance(geo['geometry'])
-        
-        elev = ((bfe1_elev/d1**power) + (bfe2_elev/d2**power) + (bfe3_elev/d3**power)) \
-        / ((1/d1**power) + (1/d2**power) + (1/d3**power))
-        interp_pts.loc[i, 'ELEV'] = elev
+        for i, geo in interp_pts.iterrows():
+            d1 = bfe.iloc[0].centroid.distance(geo['geometry'])
+            d2 = bfe.iloc[1].centroid.distance(geo['geometry'])
+            d3 = bfe.iloc[2].centroid.distance(geo['geometry'])
+            
+            elev = ((bfe1_elev/d1**power) + (bfe2_elev/d2**power) + (bfe3_elev/d3**power)) \
+            / ((1/d1**power) + (1/d2**power) + (1/d3**power))
+            interp_pts.loc[i, 'ELEV'] = elev
 
-    # ADD Z VALUE FROM ELEV FIELD
-    interp_pts['geometry'] = interp_pts['geometry'].apply(
-            lambda p: 
-            transform(lambda x, y: 
-            (x, y, interp_pts.loc[interp_pts['geometry'] == p, 'ELEV']), p))
+        # ADD Z VALUE FROM ELEV FIELD
+        interp_pts['geometry'] = interp_pts['geometry'].apply(
+                lambda p: 
+                transform(lambda x, y: 
+                (x, y, interp_pts.loc[interp_pts['geometry'] == p, 'ELEV']), p))
 
     return interp_pts[['ELEV', 'geometry']]
 
