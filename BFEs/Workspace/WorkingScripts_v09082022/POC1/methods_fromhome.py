@@ -101,7 +101,7 @@ def find_forks(flowline):
     
     return forks_list
 
-# 7: Getting Z geom for BFE points
+# 5: Getting Z geom for BFE points
 def bfe_zpts(bfe):
     bfe['points'] = bfe.apply(lambda x: [y for y in x['geometry'].coords], axis=1)
     geom = [Point(x,y) for coords in bfe['points'].to_list() for x, y in coords]
@@ -117,6 +117,7 @@ def bfe_zpts(bfe):
     
     return bfe_pts_sj
 
+# 6: Create points from non-fork LineStrings
 def interp_pts_fromLine(bfe, line_union, divisions):
 # get distance between BFEs
     tot_d = bfe.iloc[0].geometry.distance(bfe.iloc[1].geometry)
@@ -130,8 +131,13 @@ def interp_pts_fromLine(bfe, line_union, divisions):
 
     return interp_pts
 
-
-def interp_pts_fromFork(bfe, line_union, line_segs, buff_segments, divisions, non_fork):
+# 7: Create points from Fork or Fake Fork Linestrings
+def interp_pts_fromFork(bfe, 
+                        line_union, 
+                        line_segs, 
+                        buff_segments, 
+                        divisions, 
+                        non_fork):
     # get distance between BFEs
     if non_fork:
         bsegs_sj = buff_segments.sjoin(bfe, how='left')
@@ -168,8 +174,15 @@ def interp_pts_fromFork(bfe, line_union, line_segs, buff_segments, divisions, no
 
         return interp_pts
 
-# 7: BFE Centroid and interpolate pts along Flowline
-def flowline_interpolation(bfe, line_union, line_segs, buff_segments, divisions, power, fork='no', non_fork=False):
+# 8: BFE Centroid and interpolate pts along Flowline
+def flowline_interpolation(bfe, 
+                            line_union, 
+                            line_segs, 
+                            buff_segments, 
+                            divisions, 
+                            power, 
+                            fork='no', 
+                            non_fork=False):
     if fork == 'yes':
         interp_f_pts = interp_pts_fromFork(bfe, line_union, line_segs, buff_segments, divisions, non_fork)
         interp_f_df = IDW_Forks(bfe, interp_f_pts, power, non_fork)
@@ -181,7 +194,7 @@ def flowline_interpolation(bfe, line_union, line_segs, buff_segments, divisions,
         return interp_df
 
     
-# 7: FSP Simplify
+# 9: FSP Simplify
 def fsp_pts_simplify(fsp_split, fl_interpolate_POINT, tolerance):
     for i in fl_interpolate_POINT['geometry']:
         fl_pt = g(i, 26913)
@@ -196,7 +209,7 @@ def fsp_pts_simplify(fsp_split, fl_interpolate_POINT, tolerance):
         
     return fsp_pts
 
-# 8: Normal 2 BFE Point Z interpolation
+# 10: Normal 2 BFE Point Z interpolation
 def IDW(bfe, pts, power):
     # Create centroid field
     bfe['centroid'] = bfe.apply(lambda x: Point([x['geometry'].centroid.coords[0]]), axis=1)
@@ -220,11 +233,10 @@ def IDW(bfe, pts, power):
 
     return pts[['ELEV', 'geometry']]
 
-#  Fork BFE Point Z Interpolation
+#  11: Fork BFE Point Z Interpolation
 def IDW_Forks(bfe, interp_pts, power, non_fork):
     if non_fork:
         interp_pts = IDW(bfe, interp_pts, power)
-        print('ITS FAKE!')
     
     else:
         # Create centroid field
@@ -251,7 +263,7 @@ def IDW_Forks(bfe, interp_pts, power, non_fork):
 
     return interp_pts[['ELEV', 'geometry']]
 
-# 9: Extract geometry into attribute table
+# 12: Extract geometry into attribute table
 def extract_geom(df):
 # EXTRACT X, Y, Z PER POINT FOR EACH POLYGON IN RESPECTIVE FIELDS
     for i, r in df.iterrows():
@@ -267,7 +279,7 @@ def extract_geom(df):
     
     return df
 
-# 10 Union Forks (3 segs. to 1 = Union)
+# 13: Union Forks (3 segs. to 1 = Union)
 def union_fork(ids, fl, fl_buff):
     fork_segs = fl.loc[fl.index.intersection(ids)]
     fork_segs_buff = fl_buff.loc[fl_buff.index.intersection(ids)]

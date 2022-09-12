@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<metadata xml:lang="en"><Esri><CreaDate>20220912</CreaDate><CreaTime>22162500</CreaTime><ArcGISFormat>1.0</ArcGISFormat><SyncOnce>TRUE</SyncOnce><DataProperties><lineage><Process ToolSource="c:\arcpro\Resources\ArcToolbox\toolboxes\Data Management Tools.tbx\CalculateField" Date="20220912" Time="221625">CalculateField all_tri_12_2 pt_0_Z calc(!pt_0_Z!) "Python 3" "def calc(x):
-    x = round(x, 2)
-    return x" Text NO_ENFORCE_DOMAINS</Process><Process ToolSource="c:\arcpro\Resources\ArcToolbox\toolboxes\Data Management Tools.tbx\CalculateField" Date="20220912" Time="221758">CalculateField all_tri_12_2 pt_1_Z calc(!pt_1_Z!) "Python 3" "def calc(x):
-    x = round(x, 2)
-    return x" Text NO_ENFORCE_DOMAINS</Process><Process ToolSource="c:\arcpro\Resources\ArcToolbox\toolboxes\Data Management Tools.tbx\CalculateField" Date="20220912" Time="221822">CalculateField all_tri_12_2 pt_2_Z calc(!pt_2_Z!) "Python 3" "def calc(x):
-    x = round(x, 2)
-    return x" Text NO_ENFORCE_DOMAINS</Process></lineage></DataProperties></Esri></metadata>
