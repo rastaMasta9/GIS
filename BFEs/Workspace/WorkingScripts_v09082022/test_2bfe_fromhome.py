@@ -29,24 +29,23 @@ fl = split_flowline(fl, bfe)
 
 # Create Flowline Buffer for BFE intersection
 # 'fl_buff' = Original Flowline buffer
-# 'fl_buff_sj' = Flowline Buffer with Adjacent Flowlines
-fl_buff, fl_buff_sj = buff_fl_intersection(fl, 1)
+fl['buff'] = fl.apply(lambda x: x.geometry.buffer(1))
+fl_buff = fl.set_geometry('buff')
+fl_buff = fl_buff[['buff']]
+fl = fl[['geometry']]
 
-# 'adj' groupby adjacent flowline seg.IDs
-adj = create_adjacent_gpd(fl_buff_sj)
+# Find Forks
+forks_ls = find_forks(fl)
 
-# Filter 'adj' for Forks( i.e. FLowlines with more than 2 intersections)
-adj['threes'] = adj.apply(lambda x: 1 if len(x['index_right']) == 3 else np.nan, axis=1)
-threes = adj.loc[adj['threes'].notnull()]
-
-# List of groups of Forks
-if threes.shape[0] > 0:
-    forks_list = find_forks(threes)
+# Parse nonforks df out of main
+all_fsegs_forks = [segs for e in forks_ls for segs in e]
+fl_non_forks = fl.loc[~fl.index.isin(all_fsegs_forks)].reset_index()
+fl_buff_non_forks = fl_buff.loc[~fl_buff.index.isin(all_fsegs_forks)].reset_index()
 
 # Run Triangulation Build by Walking FLowlines with 2 BFE intersections
 triangles = gpd.GeoDataFrame()
 fingers = []
-for i, a in adj.iterrows():
+for i, f in fl_non_forks.iterrows():
     if len(a['index_right']) != 2: 
         pass
     else:

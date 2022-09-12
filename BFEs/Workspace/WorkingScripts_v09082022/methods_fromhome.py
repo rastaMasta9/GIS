@@ -90,10 +90,11 @@ def find_forks(flowline):
         p2b = g(p2.buffer(5), 26913)
         p1j = p1b.sjoin(flowline)
         p2j = p2b.sjoin(flowline)
-    if p1j.shape[0] == 3:
-        forks_list.append(p1j['index_right'].to_list())
-    if p2j.shape[0] == 3:
-        forks_list.append(p2j['index_right'].to_list())
+
+        if p1j.shape[0] == 3:
+            forks_list.append(p1j['index_right'].to_list())
+        if p2j.shape[0] == 3:
+            forks_list.append(p2j['index_right'].to_list())
     
     forks_list.sort()
     forks_list = list(f for f,_ in itertools.groupby(forks_list))
@@ -116,13 +117,13 @@ def bfe_zpts(bfe):
     
     return bfe_pts_sj
 
-def interp_pts_fromLine(bfe, line, divisions):
+def interp_pts_fromLine(bfe, line_union, divisions):
 # get distance between BFEs
     tot_d = bfe.iloc[0].geometry.distance(bfe.iloc[1].geometry)
     cuts = round(tot_d/divisions)
 
     # interpolate points at fixed distance 'cuts'
-    splitter = MultiPoint([line.geometry.interpolate(i/cuts, normalized=True) for i in range(1, cuts)])
+    splitter = MultiPoint([line_union.geometry.interpolate(i/cuts, normalized=True) for i in range(1, cuts)])
 
     interp_geom = [s for s in splitter]
     interp_pts = g(interp_geom, 26913)
@@ -130,13 +131,18 @@ def interp_pts_fromLine(bfe, line, divisions):
     return interp_pts
 
 
-def interp_pts_fromFork(bfe, line, divisions, non_fork):
+def interp_pts_fromFork(bfe, line_union, line_segs, buff_segments, divisions, non_fork):
     # get distance between BFEs
     if non_fork:
+        bsegs_sj = buff_segments.sjoin(bfe, how='left')
+        ids = list(bsegs_sj[~bsegs_sj.isna().any(axis=1)].index)
+        line_segs = line_segs.loc[line_segs.index.intersection(ids)]
+        nline_union = g(MultiLineString(line_segs.geometry.to_list()), 26913)
+
         tot_d = bfe.iloc[0].geometry.distance(bfe.iloc[1].geometry)
         cuts = round(tot_d/divisions)
         # interpolate points at fixed distance 'cuts'
-        splitter = [list(line.geometry.interpolate(i/cuts, normalized=True)) for i in range(1, cuts)]
+        splitter = [list(nline_union.geometry.interpolate(i/cuts, normalized=True)) for i in range(1, cuts)]
 
         interp_geom = MultiPoint([s for x in splitter for s in x])
         interp_pts = g(interp_geom, 26913)
@@ -154,7 +160,7 @@ def interp_pts_fromFork(bfe, line, divisions, non_fork):
         cuts = round(max_fork_dist/divisions)
 
         # interpolate points at fixed distance 'cuts'
-        splitter = [list(line.geometry.interpolate(i/cuts, normalized=True)) for i in range(1, cuts)]
+        splitter = [list(line_union.geometry.interpolate(i/cuts, normalized=True)) for i in range(1, cuts)]
 
         interp_geom = MultiPoint([s for x in splitter for s in x])
         interp_pts = g(interp_geom, 26913)
@@ -163,28 +169,31 @@ def interp_pts_fromFork(bfe, line, divisions, non_fork):
         return interp_pts
 
 # 7: BFE Centroid and interpolate pts along Flowline
-def flowline_interpolation(bfe, line, divisions, power, fork='no', non_fork=False):
+def flowline_interpolation(bfe, line_union, line_segs, buff_segments, divisions, power, fork='no', non_fork=False):
     if fork == 'yes':
-        interp_f_pts = interp_pts_fromFork(bfe, line, divisions, non_fork)
+        interp_f_pts = interp_pts_fromFork(bfe, line_union, line_segs, buff_segments, divisions, non_fork)
         interp_f_df = IDW_Forks(bfe, interp_f_pts, power, non_fork)
         return interp_f_df
 
     else:
-        interp_pts = interp_pts_fromLine(bfe, line, divisions)
+        interp_pts = interp_pts_fromLine(bfe, line_union, divisions)
         interp_df = IDW(bfe, interp_pts, power)
         return interp_df
 
     
 # 7: FSP Simplify
 def fsp_pts_simplify(fsp_split, fl_interpolate_POINT, tolerance):
-    fl_pt = g(fl_interpolate_POINT.iloc[0].geometry, 26913)
+    for i in fl_interpolate_POINT['geometry']:
+        fl_pt = g(i, 26913)
 
-    fsp_mask = fsp_split.sjoin(fl_pt)
-    fsp_mask_sim = list(fsp_mask.geometry.simplify(tolerance=tolerance))
-    geom = [Point(x,y) for coords in fsp_mask_sim for x, y in coords.exterior.coords]
-    
-    fsp_pts = g(geom, 26913)
-    
+        fsp_mask = fsp_split.sjoin(fl_pt)
+        if fsp_mask.shape[0] != 0:
+            fsp_mask_sim = list(fsp_mask.geometry.simplify(tolerance=tolerance))
+            geom = [Point(x,y) for coords in fsp_mask_sim for x, y in coords.exterior.coords]
+            
+            fsp_pts = g(geom, 26913)
+            break
+        
     return fsp_pts
 
 # 8: Normal 2 BFE Point Z interpolation
@@ -215,6 +224,7 @@ def IDW(bfe, pts, power):
 def IDW_Forks(bfe, interp_pts, power, non_fork):
     if non_fork:
         interp_pts = IDW(bfe, interp_pts, power)
+        print('ITS FAKE!')
     
     else:
         # Create centroid field
@@ -264,4 +274,4 @@ def union_fork(ids, fl, fl_buff):
     fork_union = g(MultiLineString(fork_segs.geometry.to_list()), 26913)
     fork_buff_union = g([fork_segs_buff.geometry.unary_union], 26913)
     
-    return fork_union, fork_buff_union
+    return fork_segs, fork_union, fork_segs_buff, fork_buff_union
