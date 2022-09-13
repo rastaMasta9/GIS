@@ -42,11 +42,11 @@ def extend_bfe(bfe, poly):
     bfe_e['dist_2poly'] = bfe_e.apply(lambda x: (Point([x['points'][0]]).distance(poly.geometry[0]),
                                        Point([x['points'][1]]).distance(poly.geometry[0])), axis=1)
     
-    bfe_e['geometry'] = bfe_e.apply(lambda x: scale(x.geometry, xfact=1.5, yfact=1.5)
+    bfe_e['geometry'] = bfe_e.apply(lambda x: scale(x.geometry, xfact=1, yfact=1)
                             if int(x['dist_2poly'][0]) | int(x['dist_2poly'][1]) < 10
-                            else (scale(x.geometry, xfact=3, yfact=3)
+                            else (scale(x.geometry, xfact=2, yfact=2)
                                   if int(x['dist_2poly'][0]) | int(x['dist_2poly'][1]) < 40
-                                        else scale(x.geometry, xfact=5, yfact=5)), axis=1)
+                                        else scale(x.geometry, xfact=4, yfact=4)), axis=1)
 
     bfe_e['points'] = bfe_e.apply(lambda x: [y for y in x['geometry'].coords], axis=1)
     
@@ -60,14 +60,25 @@ def extend_bfe(bfe, poly):
 def split_fsp(fsp, bfe):
     fsp_line = fsp.geometry.boundary[0]
     fsp_line = g(fsp_line, 26913)
-    lines = bfe['geometry'].to_list() + fsp_line['geometry'].to_list()
     
-    merge = linemerge(lines)
-    union = unary_union(merge)
-    poly = polygonize(union)
-    df = g([p for p in poly], 26913)
-    df.reset_index(inplace=True)
+    lines = bfe['geometry'].to_list() + [f for f in fsp_line['geometry']]
+    lines_df = g(lines, 26913)
+    lines_df = lines_df[lines_df.geom_type != 'MultiLineString']
+    lines = lines_df.geometry.to_list()
+    try:
+        merge = linemerge(lines)
+        union = unary_union(merge)
+        poly = polygonize(union)
+        df = g([p for p in poly], 26913)
+        df.reset_index(inplace=True)
     
+    except:
+        
+        merge = linemerge([l for l in lines])
+        union = unary_union(merge)
+        poly = polygonize(union)
+        df = g([p for p in poly], 26913)
+        df.reset_index(inplace=True)
     return df
 
 # 3: Split Flowline to Iterate on

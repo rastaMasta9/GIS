@@ -1,13 +1,14 @@
+import time
+s = time.time()
 from methods_fromhome import *
 import geopandas as gpd
 import pandas as pd
-import time
-s = time.time()
 
 
-bfe = gpd.read_file('bfe_mre_all.shp')
-fsp = gpd.read_file('fsp_sample_mre1.shp')
-fl = gpd.read_file('Flowline_Forks.shp')
+
+bfe = gpd.read_file('bfe_mre_all_poc2.shp')
+fsp = gpd.read_file('fsp_2.shp')
+fl = gpd.read_file('flowline_poc2.shp')
 
 # Reproject files to UTM
 bfe.to_crs(26913, inplace=True)
@@ -57,7 +58,7 @@ for i, f in fl_non_forks.iterrows():
     else:
         # Getting Z-geom for BFE Points
         bfe_pts = bfe_zpts(bfe_set)
-
+        print(bfe_set)
         # BFE Centroid and Flowline interpolation
         fl_i_pts = flowline_interpolation(bfe_set, 
                                             f,

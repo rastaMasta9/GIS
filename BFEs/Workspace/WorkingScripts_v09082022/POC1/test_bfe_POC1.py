@@ -1,8 +1,8 @@
+import time
+s = time.time()
 from methods_fromhome import *
 import geopandas as gpd
 import pandas as pd
-import time
-s = time.time()
 
 
 bfe = gpd.read_file('bfe_mre_all.shp')
