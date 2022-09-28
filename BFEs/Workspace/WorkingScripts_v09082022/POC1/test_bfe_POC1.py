@@ -7,7 +7,7 @@ import pandas as pd
 
 bfe = gpd.read_file('bfe_mre_all.shp')
 fsp = gpd.read_file('fsp_sample_mre1.shp')
-fl = gpd.read_file('Flowline_Forks.shp')
+fl = gpd.read_file('centerline.shp')
 
 # Reproject files to UTM
 bfe.to_crs(26913, inplace=True)

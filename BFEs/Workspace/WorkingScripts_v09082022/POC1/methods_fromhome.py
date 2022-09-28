@@ -6,6 +6,7 @@ import geopandas as gpd
 from osgeo import gdal
 import numpy as np
 import pandas as pd
+import math
 import itertools
 import warnings
 warnings.filterwarnings('ignore')
@@ -13,6 +14,7 @@ from shapely.geometry import Polygon
 from shapely.geometry import MultiPoint
 from shapely.geometry import MultiPolygon
 from shapely.geometry import MultiLineString
+from shapely.geometry import LineString
 from shapely.geometry import Point
 from shapely.ops import triangulate
 from shapely.ops import polygonize
@@ -21,6 +23,7 @@ from shapely.ops import linemerge
 from shapely.ops import unary_union
 from shapely.ops import nearest_points
 from shapely.ops import split
+from centerline.geometry import Centerline
 from osmnx.utils_geo import _quadrat_cut_geometry
 from shapely.affinity import scale
 
@@ -35,23 +38,52 @@ def g(geom, crs):
 
 
 # 1: Extend BFES Across FSP POLYGON
+# 1-1: 
+def getExtrapoledLine(p1,p2):
+    """Creates a line extrapoled in p1->p2 direction"""
+    EXTRAPOL_RATIO = 10
+    a = p1
+    b = (p1[0]+EXTRAPOL_RATIO*(p2[0]-p1[0]), p1[1]+EXTRAPOL_RATIO*(p2[1]-p1[1]) )
+    return LineString([a,b])
+
+# 1-2: 
+def get_ext_linestring(fr_pt, ba_pt):
+    """Handles Linestrings that are already extending past fsp poly.
+    Produce new line linestring"""
+    all_coords = []
+    pt_group = [fr_pt, ba_pt]
+
+    for l in pt_group:
+        if l.geom_type == 'MultiPoint':
+            explode = [x for x in l]
+            e_coords = [explode[0].coords[0], explode[1].coords[0]]
+        
+            all_coords.append(e_coords[0])
+            all_coords.append(e_coords[1])
+        else:
+            coords = l.coords[0]
+    
+            all_coords.append(list(coords))
+    nline = LineString(all_coords)
+    return nline
+
+#1-3: Applies 1-1, 1-2 to BFE df
 def extend_bfe(bfe, poly):
     bfe_e = bfe.copy()
-    bfe_e['points'] = bfe_e.apply(lambda x: [y for y in x['geometry'].coords], axis=1)
-    
-    bfe_e['dist_2poly'] = bfe_e.apply(lambda x: (Point([x['points'][0]]).distance(poly.geometry[0]),
-                                       Point([x['points'][1]]).distance(poly.geometry[0])), axis=1)
-    
-    bfe_e['geometry'] = bfe_e.apply(lambda x: scale(x.geometry, xfact=1.5, yfact=1.5)
-                            if int(x['dist_2poly'][0]) | int(x['dist_2poly'][1]) < 10
-                            else (scale(x.geometry, xfact=3, yfact=3)
-                                  if int(x['dist_2poly'][0]) | int(x['dist_2poly'][1]) < 40
-                                        else scale(x.geometry, xfact=5, yfact=5)), axis=1)
+    poly_exterior = poly.geometry.boundary[0]
+    bfe_e['points'] = bfe_e['geometry'].apply(lambda x: list((x.boundary[0].coords[0], x.boundary[1].coords[0])))
+    bfe_e['fr_ext'] = bfe_e.apply(lambda x: getExtrapoledLine(x['points'][0], x['points'][1]), axis=1)
+    bfe_e['ba_ext'] = bfe_e.apply(lambda x: getExtrapoledLine(x['points'][1], x['points'][0]), axis=1)
+    bfe_e['fr_pt'] = bfe_e.apply(lambda x: poly_exterior.intersection(x['fr_ext']), axis=1)
+    bfe_e['ba_pt'] = bfe_e.apply(lambda x: poly_exterior.intersection(x['ba_ext']), axis=1)
 
-    bfe_e['points'] = bfe_e.apply(lambda x: [y for y in x['geometry'].coords], axis=1)
     
-    bfe_e.set_geometry('geometry', inplace=True)
-    bfe_e = bfe_e[['ELEV', 'geometry']]
+    bfe_e['ext_geom'] = bfe_e.apply(lambda x: get_ext_linestring(x['fr_pt'], x['ba_pt']), axis=1)
+    bfe_e['ext_geom_scale'] = bfe_e.apply(lambda x: scale(x.geometry, xfact=1.2, yfact=1.2), axis=1)
+    
+    bfe_e = bfe_e[['ELEV', 'ext_geom_scale']]
+    bfe_e.rename(columns={'ext_geom_scale': 'geometry'}, inplace=True)
+    bfe_e.set_geometry('geometry', crs=26913, inplace=True)
     
     return bfe_e
     
@@ -60,6 +92,7 @@ def extend_bfe(bfe, poly):
 def split_fsp(fsp, bfe):
     fsp_line = fsp.geometry.boundary[0]
     fsp_line = g(fsp_line, 26913)
+    fsp_line = fsp_line.explode()
     lines = bfe['geometry'].to_list() + fsp_line['geometry'].to_list()
     
     merge = linemerge(lines)
@@ -121,10 +154,11 @@ def bfe_zpts(bfe):
 def interp_pts_fromLine(bfe, line_union, divisions):
 # get distance between BFEs
     tot_d = bfe.iloc[0].geometry.distance(bfe.iloc[1].geometry)
-    cuts = round(tot_d/divisions)
-
+    cuts = round(tot_d/divisions, 2)
+    if cuts <= 1:
+        cuts = 2
     # interpolate points at fixed distance 'cuts'
-    splitter = MultiPoint([line_union.geometry.interpolate(i/cuts, normalized=True) for i in range(1, cuts)])
+    splitter = MultiPoint([line_union.geometry.interpolate(i/cuts, normalized=True) for i in range(1, math.ceil(cuts))])
 
     interp_geom = [s for s in splitter]
     interp_pts = g(interp_geom, 26913)
@@ -195,43 +229,44 @@ def flowline_interpolation(bfe,
 
     
 # 9: FSP Simplify
-def fsp_pts_simplify(fsp_split, fl_interpolate_POINT, tolerance):
-    for i in fl_interpolate_POINT['geometry']:
-        fl_pt = g(i, 26913)
-
-        fsp_mask = fsp_split.sjoin(fl_pt)
-        if fsp_mask.shape[0] != 0:
-            fsp_mask_sim = list(fsp_mask.geometry.simplify(tolerance=tolerance))
-            geom = [Point(x,y) for coords in fsp_mask_sim for x, y in coords.exterior.coords]
-            
-            fsp_pts = g(geom, 26913)
-            break
-        
+def fsp_pts_simplify(fsp_split, tolerance):
+    fsp_mask_sim = list(fsp_split.geometry.simplify(tolerance=tolerance))
+    geom = [Point(x,y) for coords in fsp_mask_sim for x, y in coords.exterior.coords]
+    
+    fsp_pts = g(geom, 26913)
+    
     return fsp_pts
 
 # 10: Normal 2 BFE Point Z interpolation
-def IDW(bfe, pts, power):
+def IDW(pts, bfe, power, bfe_count):
     # Create centroid field
     bfe['centroid'] = bfe.apply(lambda x: Point([x['geometry'].centroid.coords[0]]), axis=1)
 
     bfe1_elev = bfe.iloc[0]['ELEV']
     bfe2_elev = bfe.iloc[1]['ELEV']
-    
+
     for i, geo in pts.iterrows():
         d1 = bfe.iloc[0].centroid.distance(geo['geometry'])
         d2 = bfe.iloc[1].centroid.distance(geo['geometry'])
-        
+    
         elev = ((bfe1_elev/d1**power) + (bfe2_elev/d2**power)) \
         / ((1/d1**power) + (1/d2**power))
+        
         pts.loc[i, 'ELEV'] = elev
+    return pts
+        
+        
+def ELEV_2geom(df):
+    """Takes Z geometry from interpolated dataframe and 
+    creates attribute table"""
 
     # ADD Z VALUE FROM ELEV FIELD
-    pts['geometry'] = pts['geometry'].apply(
+    df['geometry'] = df['geometry'].apply(
             lambda p: 
             transform(lambda x, y: 
-            (x, y, pts.loc[pts['geometry'] == p, 'ELEV']), p))
+            (x, y, df.loc[df['geometry'] == p, 'ELEV']), p))
 
-    return pts[['ELEV', 'geometry']]
+    return df[['ELEV', 'geometry']]
 
 #  11: Fork BFE Point Z Interpolation
 def IDW_Forks(bfe, interp_pts, power, non_fork):
@@ -287,3 +322,15 @@ def union_fork(ids, fl, fl_buff):
     fork_buff_union = g([fork_segs_buff.geometry.unary_union], 26913)
     
     return fork_segs, fork_union, fork_segs_buff, fork_buff_union
+
+def remove_multiline_BFE(bfe_set):
+    if 'MultiLineString' in bfe_set.geom_type.to_list():
+        multi_geom = bfe_set.loc[bfe_set.geom_type == 'MultiLineString']
+        lines = multi_geom.explode()
+        max_line = lines.loc[lines.geometry.length == max(lines.geometry.length)]
+        bfe_set = bfe_set.loc[~bfe_set.index.isin(multi_geom.index)]
+        bfe_set = pd.concat([bfe_set, max_line], ignore_index=True)
+    else:
+        pass
+        
+    return bfe_set
